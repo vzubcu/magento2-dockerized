@@ -1,0 +1,138 @@
+version: '3.7'
+services:
+  web:
+    container_name: web
+    image: web:php8.1-apache
+    build:
+      context: ./config/web/
+      dockerfile: Dockerfile
+    hostname: magentolts.local
+    stdin_open: true # docker run -i
+    tty: true        # docker run -t
+    working_dir: /var/www/html
+    depends_on:
+      - dbserver
+      - sessions
+      - cache
+      - elasticsearch
+    links:
+      - dbserver
+      - sessions
+      - cache
+      - elasticsearch
+    environment:
+      APACHE_RUN_USER: "mageuser"
+      APACHE_RUN_GROUP: "mageuser"
+    volumes:
+      - ./html:/var/www/html/
+      - ./config/web/docker-php-ext-xdebug.ini:/usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini:ro
+      - ./config/web/docker-php-ext-opcache.ini:/usr/local/etc/php/conf.d/docker-php-ext-opcache.ini:ro
+      - ./config/web/php.ini:/usr/local/etc/php/php.ini:ro
+      - ./config/web/error_reporting.ini:/usr/local/etc/php/conf.d/error_reporting.ini:ro
+      - ./config/web/apache/000-default.conf:/etc/apache2/sites-available/000-default.conf:ro
+      - ./config/web/apache/certificate/magentolts.local/:/etc/apache2/certificate/:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - magento-network
+
+  dbserver:
+    container_name: mysql
+    image: mysql
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: magento
+      MYSQL_DATABASE: magento
+      MYSQL_USER: magento
+      MYSQL_PASSWORD: magento
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "127.0.0.1:3306:3306"
+    networks:
+      - magento-network
+
+  phpmyadmin:
+    container_name: phpmyadmin
+    image: phpmyadmin/phpmyadmin
+    ports:
+      - "8080:80"
+    environment:
+      PMA_HOST: dbserver
+      PMA_PORT: 3306
+    depends_on:
+      - dbserver
+    networks:
+      - magento-network
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: 'mailhog'
+    ports:
+      - "1025:1025" # smtp server
+      - "8025:8025" # web ui
+    networks:
+      - magento-network
+
+  cache:
+    image: redis:6.2
+    container_name: cache
+    restart: always
+    networks:
+      - magento-network
+
+  sessions:
+    image: redis:6.2
+    container_name: sessions
+    restart: always
+    volumes:
+      - sessions:/data
+    networks:
+      - magento-network
+
+  elasticsearch:
+    image: elasticsearch:7.17.6
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 2g
+    ports:
+      - "9300:9300"
+      - "9200:9200"
+    networks:
+      - magento-network
+  
+  varnish:
+    image: varnish:7.0
+    ports:
+      - "6082:6082"
+    depends_on:
+      - web
+    links:
+      - web
+    volumes:
+      - ./config/varnish/varnish.vcl:/etc/varnish/default.vcl
+      - ./config/varnish/varnish.secret:/etc/varnish/secret
+    environment:
+      - CACHE_SIZE=256M
+    networks:
+      - magento-network
+
+networks:
+  magento-network:
+    driver: bridge
+
+volumes:
+  db_data:
+    driver: local
+  sessions:
+    driver: local
+  elasticsearch-data:
+    driver: local
